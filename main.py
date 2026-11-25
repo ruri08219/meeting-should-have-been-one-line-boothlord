@@ -4,7 +4,7 @@
 Writes exactly one line (1-200 chars, no newline) to entry.txt in the
 output directory ($OUTPUT_DIR, default /output).
 
-Entry (118 chars, one sentence):
+Entry (116 chars, one sentence):
     We spent forty minutes deciding who should send the email, and the
     email was: this meeting could have been an email.
 
@@ -32,6 +32,14 @@ Gate rules enforced here, mirroring the competition gate:
     slip past a plain ord() < 0x20 check.
   * UTF-8 byte length is reported as a sanity check (ASCII entry, so
     bytes == chars here); the gate itself is character-based.
+  * The entry must actually encode as UTF-8: an unpaired surrogate
+    (which _is_printable rejects, but which a future edit or a
+    category-table difference could let through) would otherwise
+    crash the write with an unhandled UnicodeEncodeError instead of
+    a clean gate error. validate() therefore proves encodability
+    up front and enforces a byte-length sanity bound of 4 * MAX_CHARS
+    (the theoretical maximum for a <=200-char entry, so it can never
+    reject a gate-passing entry).
 Any violation exits 1 and writes nothing.
 """
 
@@ -77,6 +85,28 @@ def validate(entry: str) -> None:
         print(
             "error: entry contains non-printable character U+%04X"
             % ord(bad[0]),
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    # Prove UTF-8 encodability before any file is touched: a lone
+    # surrogate would otherwise raise UnicodeEncodeError mid-write
+    # (unhandled traceback, after makedirs) instead of a gate error.
+    try:
+        nbytes = len(entry.encode("utf-8"))
+    except UnicodeEncodeError as exc:
+        print(
+            "error: entry is not encodable as UTF-8 (unpaired surrogate "
+            "U+%04X)" % ord(exc.object[exc.start]),
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    # Sanity bound: 4 bytes/char is the UTF-8 maximum, so a <=200-char
+    # entry can never exceed 4 * MAX_CHARS bytes; anything above that
+    # is pathological and is rejected rather than written.
+    if nbytes > 4 * MAX_CHARS:
+        print(
+            "error: entry is %d UTF-8 bytes, over the %d-byte sanity bound"
+            % (nbytes, 4 * MAX_CHARS),
             file=sys.stderr,
         )
         sys.exit(1)
